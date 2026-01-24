@@ -165,7 +165,7 @@ async function runClaimCheck() {
     console.log(`\n[${new Date().toISOString()}] Starting claim check...`);
 
     const browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         userDataDir: USER_DATA_DIR,
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
         defaultViewport: { width: 1280, height: 800 },
@@ -198,12 +198,21 @@ async function runClaimCheck() {
     } catch (error) {
         console.error('[ERROR] Claim check failed:', error.message);
     } finally {
+        // Close all tabs and clean up browser
+        try {
+            const pages = await browser.pages();
+            for (const page of pages) {
+                await page.close();
+            }
+        } catch (e) {
+            // Ignore errors during cleanup
+        }
         await browser.close();
     }
 }
 
-// Candle close times: :02, :17, :32, :47 minutes past the hour
-const CANDLE_CLOSE_MINUTES = [2, 17, 32, 47];
+// Candle close times: :05, :20, :35, :50 minutes past the hour
+const CANDLE_CLOSE_MINUTES = [5, 20, 35, 50];
 
 function getNextCheckTime() {
     const now = new Date();
@@ -244,7 +253,7 @@ function scheduleNextCheck() {
 async function main() {
     console.log('======================================================');
     console.log(' Polymarket Auto-Claimer');
-    console.log(' Checking at candle closes: :02, :17, :32, :47');
+    console.log(' Checking at candle closes: :05, :20, :35, :50');
     console.log(' Using persistent browser profile for session');
     console.log('======================================================\n');
 
