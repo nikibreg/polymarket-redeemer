@@ -20,7 +20,7 @@ const CLAIM_XPATHS = [
 async function clickClaimProceedsInModal(page) {
     // Wait for the modal to appear
     console.log('[INFO] Waiting for modal to appear...');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     // Try to find "Claim proceeds" button in the modal
     try {
@@ -37,6 +37,8 @@ async function clickClaimProceedsInModal(page) {
             console.log(`[INFO] Found "Claim proceeds" button in modal: "${buttonText}"`);
             await claimProceedsButton.click();
             console.log('[SUCCESS] Clicked "Claim proceeds" button!');
+            console.log('[INFO] Waiting for claim transaction to process...');
+            await new Promise(resolve => setTimeout(resolve, 30000));
             return true;
         }
     } catch (error) {
@@ -191,8 +193,9 @@ async function runClaimCheck() {
         const clicked = await findAndClickClaimButton(page);
 
         if (clicked) {
-            // Wait for any confirmation dialogs/transactions
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // Wait for any confirmation dialogs/transactions to complete
+            console.log('[INFO] Waiting for final transaction confirmation...');
+            await new Promise(resolve => setTimeout(resolve, 15000));
         }
 
     } catch (error) {
