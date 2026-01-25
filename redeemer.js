@@ -37,8 +37,41 @@ async function clickClaimProceedsInModal(page) {
             console.log(`[INFO] Found "Claim proceeds" button in modal: "${buttonText}"`);
             await claimProceedsButton.click();
             console.log('[SUCCESS] Clicked "Claim proceeds" button!');
-            console.log('[INFO] Waiting for claim transaction to process...');
-            await new Promise(resolve => setTimeout(resolve, 30000));
+            console.log('[INFO] Waiting for "Done" button to appear...');
+
+            // Wait for the "Done" button to appear (with timeout)
+            const maxWaitTime = 120000; // 2 minutes max
+            const startTime = Date.now();
+            let doneButtonFound = false;
+
+            while (Date.now() - startTime < maxWaitTime && !doneButtonFound) {
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds
+
+                try {
+                    const doneButton = await page.evaluateHandle(() => {
+                        const buttons = Array.from(document.querySelectorAll('button'));
+                        return buttons.find(btn => {
+                            const text = btn.textContent?.trim().toLowerCase() || '';
+                            return text === 'done';
+                        });
+                    });
+
+                    if (doneButton && doneButton.asElement()) {
+                        console.log('[SUCCESS] Found "Done" button!');
+                        await doneButton.click();
+                        console.log('[SUCCESS] Clicked "Done" button!');
+                        doneButtonFound = true;
+                        await new Promise(resolve => setTimeout(resolve, 2000)); // Brief wait after clicking Done
+                    }
+                } catch (error) {
+                    // Continue waiting
+                }
+            }
+
+            if (!doneButtonFound) {
+                console.log('[WARN] "Done" button did not appear within timeout period');
+            }
+
             return true;
         }
     } catch (error) {
@@ -193,9 +226,8 @@ async function runClaimCheck() {
         const clicked = await findAndClickClaimButton(page);
 
         if (clicked) {
-            // Wait for any confirmation dialogs/transactions to complete
-            console.log('[INFO] Waiting for final transaction confirmation...');
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            // Give a brief moment for any final UI updates
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
     } catch (error) {
