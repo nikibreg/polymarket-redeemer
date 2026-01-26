@@ -215,9 +215,36 @@ async function runClaimCheck() {
         console.log(`[DEBUG] Login status: ${isLoggedIn}`);
 
         if (!isLoggedIn) {
-            console.log('[WARN] Not logged in. Please run with a valid browser_profile session.');
-            await browser.close();
-            return;
+            console.log('[INFO] Not logged in. Please log in via the browser window...');
+            // Poll until the user logs in manually
+            const loginTimeout = 5 * 60 * 1000; // 5 minutes
+            const loginStart = Date.now();
+            let loggedIn = false;
+
+            while (Date.now() - loginStart < loginTimeout) {
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                try {
+                    loggedIn = await checkIfLoggedIn(page);
+                    if (loggedIn) {
+                        console.log('[SUCCESS] Login detected!');
+                        break;
+                    }
+                } catch {
+                    // page may have navigated, reload portfolio
+                    try {
+                        await page.goto(POLYMARKET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    } catch {
+                        // ignore
+                    }
+                }
+            }
+
+            if (!loggedIn) {
+                console.log('[WARN] Login timed out after 5 minutes. Exiting.');
+                await browser.close();
+                return;
+            }
         }
 
         console.log('[INFO] Session valid, checking for claim buttons...');
