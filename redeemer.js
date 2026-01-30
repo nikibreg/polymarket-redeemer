@@ -274,7 +274,7 @@ async function runClaimCheck() {
 }
 
 // Candle close times: :05, :20, :35, :50 minutes past the hour
-const CANDLE_CLOSE_MINUTES = [5, 20, 35, 50];
+const CANDLE_CLOSE_MINUTES = [4, 19, 34, 49];
 
 function getNextCheckTime() {
     const now = new Date();
@@ -315,7 +315,7 @@ function scheduleNextCheck() {
 async function main() {
     console.log('======================================================');
     console.log(' Polymarket Auto-Claimer');
-    console.log(' Checking at candle closes: :05, :20, :35, :50');
+    console.log(' Checking at candle closes: :04, :19, :34, :49');
     console.log(' Using persistent browser profile for session');
     console.log('======================================================\n');
 
