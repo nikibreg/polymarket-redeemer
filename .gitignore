@@ -40,3 +40,9 @@ browser_profile/
 
 # Cookies
 cookies.json
+
+# Debug screenshots
+debug_*.png
+
+# npm lock file (using bun)
+package-lock.json

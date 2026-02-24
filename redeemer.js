@@ -8,149 +8,225 @@ puppeteer.use(StealthPlugin());
 const USER_DATA_DIR = path.join(process.cwd(), 'browser_profile');
 const POLYMARKET_URL = 'https://polymarket.com/portfolio';
 
-// Selectors from the provided files
-const CLAIM_SELECTORS = [
-    '#__pm_layout > div > div.fresnel-container.fresnel-greaterThanOrEqual-lg.fresnel-_r_18_.contents > div > div > div > button',
-];
-
-const CLAIM_XPATHS = [
-    '//*[@id="__pm_layout"]/div/div[3]/div/div/div/button',
-];
-
-async function clickClaimProceedsInModal(page) {
-    // Wait for the modal to appear
-    console.log('[INFO] Waiting for modal to appear...');
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // Try to find "Claim proceeds" button in the modal
+async function takeDebugScreenshot(page, label) {
     try {
-        const claimProceedsButton = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(btn => {
-                const text = btn.textContent?.toLowerCase() || '';
-                return text.includes('claim proceeds') || text.includes('claim winnings');
-            });
-        });
-
-        if (claimProceedsButton && claimProceedsButton.asElement()) {
-            const buttonText = await page.evaluate(el => el.textContent, claimProceedsButton);
-            console.log(`[INFO] Found "Claim proceeds" button in modal: "${buttonText}"`);
-            await claimProceedsButton.click();
-            console.log('[SUCCESS] Clicked "Claim proceeds" button!');
-            console.log('[INFO] Waiting for "Done" button to appear...');
-
-            // Wait for the "Done" button to appear (with timeout)
-            const maxWaitTime = 120000; // 2 minutes max
-            const startTime = Date.now();
-            let doneButtonFound = false;
-
-            while (Date.now() - startTime < maxWaitTime && !doneButtonFound) {
-                await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds
-
-                try {
-                    const doneButton = await page.evaluateHandle(() => {
-                        const buttons = Array.from(document.querySelectorAll('button'));
-                        return buttons.find(btn => {
-                            const text = btn.textContent?.trim().toLowerCase() || '';
-                            return text === 'done';
-                        });
-                    });
-
-                    if (doneButton && doneButton.asElement()) {
-                        console.log('[SUCCESS] Found "Done" button!');
-                        await doneButton.click();
-                        console.log('[SUCCESS] Clicked "Done" button!');
-                        doneButtonFound = true;
-                        await new Promise(resolve => setTimeout(resolve, 2000)); // Brief wait after clicking Done
-                    }
-                } catch (error) {
-                    // Continue waiting
-                }
-            }
-
-            if (!doneButtonFound) {
-                console.log('[WARN] "Done" button did not appear within timeout period');
-            }
-
-            return true;
-        }
-    } catch (error) {
-        console.log('[WARN] Error finding Claim proceeds button:', error.message);
+        const screenshotPath = path.join(process.cwd(), `debug_${label}_${Date.now()}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(`[DEBUG] Screenshot saved: ${screenshotPath}`);
+    } catch (e) {
+        console.log('[DEBUG] Failed to save screenshot:', e.message);
     }
+}
 
-    console.log('[INFO] No "Claim proceeds" button found in modal.');
+async function logAllButtons(page, context) {
+    const allButtons = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('button')).map(btn => ({
+            text: btn.textContent?.trim().substring(0, 80),
+            visible: btn.offsetParent !== null,
+            disabled: btn.disabled,
+            tag: btn.tagName,
+            // Check if button is inside a link (which would navigate)
+            insideLink: !!btn.closest('a'),
+            parentTag: btn.parentElement?.tagName,
+        }));
+    });
+    console.log(`[DEBUG] Buttons (${context}):`, JSON.stringify(allButtons, null, 2));
+}
+
+async function waitForButtonAndClick(page, matchFn, label, timeoutMs = 120000) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+        try {
+            const button = await page.evaluateHandle(matchFn);
+            if (button && button.asElement()) {
+                const info = await page.evaluate(el => ({
+                    text: el.textContent?.trim(),
+                    disabled: el.disabled,
+                }), button);
+                console.log(`[SUCCESS] Found "${label}" button: "${info.text}"`);
+                await button.click();
+                console.log(`[SUCCESS] Clicked "${label}" button!`);
+                return true;
+            }
+        } catch (e) {
+            // ignore, retry
+        }
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        if (elapsed > 0 && elapsed % 10 === 0) {
+            console.log(`[DEBUG] Still waiting for "${label}" button (${elapsed}s)...`);
+            await logAllButtons(page, `waiting-${label}-${elapsed}s`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    console.log(`[WARN] "${label}" button did not appear within ${timeoutMs / 1000}s`);
+    await takeDebugScreenshot(page, `no_${label}`);
     return false;
 }
 
 async function findAndClickClaimButton(page) {
-    // Try CSS selectors first
-    for (const selector of CLAIM_SELECTORS) {
-        try {
-            const button = await page.$(selector);
-            if (button) {
-                const buttonText = await page.evaluate(el => el.textContent, button);
-                if (buttonText && buttonText.toLowerCase().includes('claim')) {
-                    console.log(`[INFO] Found claim button with selector: ${selector}`);
-                    console.log(`[INFO] Button text: ${buttonText}`);
-                    await button.click();
-                    console.log('[SUCCESS] Clicked claim button!');
+    await takeDebugScreenshot(page, 'before_claim');
+    await logAllButtons(page, 'portfolio-page');
 
-                    // Step 2: Click "Claim proceeds" in the modal
-                    await clickClaimProceedsInModal(page);
-                    return true;
+    // Log current URL to detect unexpected navigation
+    const currentUrl = page.url();
+    console.log(`[DEBUG] Current URL: ${currentUrl}`);
+
+    // Step 1: Find and click the initial "Claim" button on the portfolio page.
+    // This is the "Markets Won" banner button. We must be very precise:
+    // - Match buttons whose DIRECT text is "Claim" or "Claim $..." (short text)
+    // - Exclude buttons inside <a> tags (those are navigation links to markets)
+    // - Exclude buttons with long text (those are market position cards, not action buttons)
+    const bannerClaimClicked = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        for (const btn of buttons) {
+            const text = btn.textContent?.trim() || '';
+            const lower = text.toLowerCase();
+
+            // Skip buttons inside anchor tags (those navigate to market pages)
+            if (btn.closest('a')) continue;
+
+            // Skip invisible buttons
+            if (!btn.offsetParent) continue;
+
+            // Match: exact "Claim", "Claim $X.XX", "Claim Proceeds", "Claim Winnings"
+            // Must start with "claim" and be short (banner buttons are concise)
+            const isClaimButton = (
+                lower === 'claim' ||
+                lower.startsWith('claim $') ||
+                lower === 'claim proceeds' ||
+                lower === 'claim winnings' ||
+                lower === 'claim all'
+            );
+
+            if (isClaimButton) {
+                // Extra safety: claim banner buttons are short, not long market descriptions
+                if (text.length > 40) continue;
+                btn.click();
+                return { clicked: true, text };
+            }
+        }
+        return { clicked: false };
+    });
+
+    if (!bannerClaimClicked.clicked) {
+        // Fallback: also check for links/divs that act as claim buttons
+        const fallbackClicked = await page.evaluate(() => {
+            // Some UIs use <a> or <div> styled as buttons for the claim action
+            const allClickable = Array.from(document.querySelectorAll('button, [role="button"]'));
+            for (const el of allClickable) {
+                const text = el.textContent?.trim() || '';
+                const lower = text.toLowerCase();
+                if (!el.offsetParent) continue;
+                if (text.length > 40) continue;
+
+                if (lower === 'claim' || lower.startsWith('claim $') || lower === 'claim proceeds' || lower === 'claim winnings' || lower === 'claim all') {
+                    el.click();
+                    return { clicked: true, text };
                 }
             }
-        } catch (error) {
-            // Selector didn't work, try next
-        }
-    }
-
-    // Try XPath selectors
-    for (const xpath of CLAIM_XPATHS) {
-        try {
-            const elements = await page.$x(xpath);
-            if (elements.length > 0) {
-                const button = elements[0];
-                const buttonText = await page.evaluate(el => el.textContent, button);
-                if (buttonText && buttonText.toLowerCase().includes('claim')) {
-                    console.log(`[INFO] Found claim button with xpath: ${xpath}`);
-                    console.log(`[INFO] Button text: ${buttonText}`);
-                    await button.click();
-                    console.log('[SUCCESS] Clicked claim button!');
-
-                    // Step 2: Click "Claim proceeds" in the modal
-                    await clickClaimProceedsInModal(page);
-                    return true;
-                }
-            }
-        } catch (error) {
-            // XPath didn't work, try next
-        }
-    }
-
-    // Try generic text-based search as fallback
-    try {
-        const claimButton = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            return buttons.find(btn => btn.textContent?.toLowerCase().includes('claim'));
+            return { clicked: false };
         });
 
-        if (claimButton && claimButton.asElement()) {
-            const buttonText = await page.evaluate(el => el.textContent, claimButton);
-            console.log(`[INFO] Found claim button via text search: "${buttonText}"`);
-            await claimButton.click();
-            console.log('[SUCCESS] Clicked claim button!');
-
-            // Step 2: Click "Claim proceeds" in the modal
-            await clickClaimProceedsInModal(page);
-            return true;
+        if (!fallbackClicked.clicked) {
+            console.log('[INFO] No claim button found on the portfolio page.');
+            return false;
         }
-    } catch (error) {
-        // Text search didn't work
+        console.log(`[SUCCESS] Clicked claim button (fallback): "${fallbackClicked.text}"`);
+    } else {
+        console.log(`[SUCCESS] Clicked claim banner button: "${bannerClaimClicked.text}"`);
     }
 
-    console.log('[INFO] No claim button found on this page.');
-    return false;
+    // Step 2: Wait for modal and click "Claim" / "Claim Proceeds" inside it
+    console.log('[INFO] Waiting for claim modal to appear...');
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Check if we accidentally navigated away from portfolio
+    const urlAfterClick = page.url();
+    if (!urlAfterClick.includes('/portfolio')) {
+        console.log(`[WARN] Navigated away to: ${urlAfterClick}`);
+        console.log('[INFO] Wrong button clicked (navigated to market page). Going back to portfolio...');
+        await page.goto(POLYMARKET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        await takeDebugScreenshot(page, 'returned_to_portfolio');
+        return false;
+    }
+
+    await takeDebugScreenshot(page, 'after_banner_click');
+    await logAllButtons(page, 'after-banner-click');
+
+    // Look for the modal "Claim" button
+    const modalClaimClicked = await page.evaluate(() => {
+        // Prioritize buttons inside modal/dialog containers
+        const modalSelectors = [
+            '[role="dialog"]',
+            '[class*="modal" i]',
+            '[class*="Modal"]',
+            '[class*="overlay" i]',
+            '[class*="Overlay"]',
+            '[class*="dialog" i]',
+            '[class*="Dialog"]',
+            '[class*="drawer" i]',
+            '[class*="Drawer"]',
+            '[class*="popup" i]',
+            '[class*="Popup"]',
+        ];
+
+        // First try: button inside a modal container
+        for (const selector of modalSelectors) {
+            const containers = document.querySelectorAll(selector);
+            for (const container of containers) {
+                const buttons = Array.from(container.querySelectorAll('button, [role="button"]'));
+                for (const btn of buttons) {
+                    const text = btn.textContent?.trim().toLowerCase() || '';
+                    if (text === 'claim' || text === 'claim proceeds' || text === 'claim winnings' || text.startsWith('claim $') || text === 'claim all') {
+                        if (btn.disabled) continue;
+                        btn.click();
+                        return { clicked: true, text: btn.textContent?.trim(), method: 'modal' };
+                    }
+                }
+            }
+        }
+
+        // Second try: any visible claim button (modal might not use standard classes)
+        const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
+        for (const btn of allButtons) {
+            const text = btn.textContent?.trim().toLowerCase() || '';
+            if (!btn.offsetParent) continue;
+            if (btn.disabled) continue;
+            if (text === 'claim' || text === 'claim proceeds' || text === 'claim winnings' || text === 'claim all') {
+                btn.click();
+                return { clicked: true, text: btn.textContent?.trim(), method: 'fallback' };
+            }
+        }
+
+        return { clicked: false };
+    });
+
+    if (modalClaimClicked.clicked) {
+        console.log(`[SUCCESS] Clicked modal Claim button (${modalClaimClicked.method}): "${modalClaimClicked.text}"`);
+    } else {
+        console.log('[INFO] No Claim button found in modal. The banner click may have been sufficient.');
+    }
+
+    // Step 3: Wait for "Done" button
+    console.log('[INFO] Waiting for "Done" button to appear...');
+    const doneClicked = await waitForButtonAndClick(page, () => {
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+        return buttons.find(btn => {
+            const text = btn.textContent?.trim().toLowerCase() || '';
+            return text === 'done' && btn.offsetParent;
+        });
+    }, 'Done', 120000);
+
+    if (doneClicked) {
+        console.log('[INFO] Reloading portfolio to update balance...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await page.goto(POLYMARKET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log('[SUCCESS] Portfolio reloaded with updated balance.');
+    }
+
+    return true;
 }
 
 async function checkIfLoggedIn(page) {
