@@ -35,14 +35,5 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# Browser profile (contains session data)
-browser_profile/
-
-# Cookies
-cookies.json
-
-# Debug screenshots
-debug_*.png
-
 # npm lock file (using bun)
 package-lock.json
