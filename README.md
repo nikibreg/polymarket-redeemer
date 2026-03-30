@@ -1,17 +1,24 @@
 # polymarket-redeemer
 
-This is a fully working Polymarket claim automation script built for reliability rather than optimal speed. It gets the job done end to end, but there is room for efficiency tweaks if you need higher throughput.
+Automatically redeems winning Polymarket positions using the [Polymarket CLI](https://github.com/Polymarket/polymarket-cli). Checks every 15 minutes at candle closes (:04, :19, :34, :49).
 
-To install dependencies:
+## Setup
 
-```bash
-bun install
-```
-
-To run:
+Install the Polymarket CLI:
 
 ```bash
-bun run index.ts
+brew tap Polymarket/polymarket-cli https://github.com/Polymarket/polymarket-cli
+brew install polymarket
 ```
 
-This project was created using `bun init` in bun v1.3.4. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Import your wallet:
+
+```bash
+polymarket wallet import
+```
+
+## Run
+
+```bash
+bun run redeemer.js
+```
